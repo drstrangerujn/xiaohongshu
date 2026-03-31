@@ -57,38 +57,50 @@ def _config():
 
 async def check_login(account: str = "default") -> dict:
     """
-    检查登录状态。三层判断：
-    1. cookie 里有 web_session → 已登录（最可靠，不依赖页面渲染）
-    2. 页面上有用户头像 → 已登录
-    3. 都没有 → 未登录
+    检查登录状态。拦截浏览器自动发的 user/me API 响应来判断。
+    不能手动 fetch（境外 IP 会 500），也不能只看 cookie（匿名也有 web_session）。
     """
     try:
         async with open_browser(account) as (ctx, page):
+            user_info = {}
+
+            async def on_response(response):
+                nonlocal user_info
+                if "user/me" in response.url:
+                    try:
+                        body = await response.json()
+                        if body.get("code") == 0:
+                            user_info = body.get("data", {})
+                    except Exception:
+                        pass
+
+            page.on("response", on_response)
             await page.goto(XHS_HOME, wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)  # 等浏览器自动发 user/me 请求
 
-            # 第一层：查 cookie（最可靠）
-            cookies = await ctx.cookies()
-            cookie_names = {c["name"] for c in cookies if "xiaohongshu" in c.get("domain", "")}
-            has_session = "web_session" in cookie_names
+            user_id = user_info.get("user_id", "")
+            nickname = user_info.get("nickname", "")
 
-            if has_session:
+            if nickname:
                 return {
                     "logged_in": True,
-                    "detail": "已登录（web_session cookie 有效）",
-                    "cookies": sorted(cookie_names),
+                    "detail": f"已登录: {nickname}",
+                    "user_id": user_id,
+                    "nickname": nickname,
                 }
 
-            # 第二层：查页面元素
-            user_avatar = page.locator('[class*="user-avatar"], [class*="avatar"], .sidebar-avatar, img.ava')
-            if await user_avatar.count() > 0 and await user_avatar.first.is_visible():
-                return {"logged_in": True, "detail": "已登录（页面有用户头像）", "cookies": sorted(cookie_names)}
+            if user_id:
+                return {
+                    "logged_in": True,
+                    "detail": f"已登录（user_id: {user_id}）",
+                    "user_id": user_id,
+                    "nickname": "",
+                }
 
-            # 第三层：没登录
+            # 浏览器没发 user/me 或返回无 user_id → 没登录
             return {
                 "logged_in": False,
                 "detail": "未登录，需要扫码",
-                "cookies": sorted(cookie_names),
             }
 
     except Exception as e:
@@ -112,10 +124,9 @@ def _start_qr_server(qr_path: str, port: int = 18088) -> str:
     qr_dir = str(Path(qr_path).parent)
     qr_filename = Path(qr_path).name
 
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=qr_dir)
-
-    # 静默日志
-    class QuietHandler(handler):
+    class QuietHandler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=qr_dir, **kwargs)
         def log_message(self, format, *args):
             pass
 
@@ -201,30 +212,40 @@ async def qr_login(account: str = "default", serve_port: int = 18088) -> dict:
         await asyncio.sleep(3)
 
         # 干掉 cookie banner / 隐私弹窗（点"同意"或直接关掉）
-        await _dismiss_cookie_banner(page)
+        # 只关 cookie banner，保留登录弹窗
+        try:
+            cb = page.locator('.cookie-banner__btn--primary')
+            if await cb.count() > 0 and await cb.is_visible():
+                await cb.click()
+                await asyncio.sleep(1)
+        except Exception:
+            pass
+        await page.evaluate("""
+            document.querySelectorAll('.cookie-banner, .cookie-banner-overlay, .cookie-banner--web').forEach(e => e.remove());
+        """)
+        await asyncio.sleep(1)
 
-        # 小红书关掉 cookie banner 后会自动弹出登录弹窗（.login-modal）
-        # 如果没弹出来，再手动点登录按钮
-        login_modal = page.locator('.login-modal, .login-container')
-        if await login_modal.count() == 0 or not await login_modal.first.is_visible():
-            for sel in ['button.login-btn', '.side-bar-component.login-btn', '[class*="login-btn"]']:
+        # 检查登录弹窗是否已经自动弹出
+        qr_img = page.locator('img.qrcode-img')
+        if await qr_img.count() == 0:
+            # 没自动弹出，手动点登录按钮
+            for sel in ['button.login-btn', '.side-bar-component.login-btn']:
                 btn = page.locator(sel).first
                 if await btn.count() > 0 and await btn.is_visible():
-                    await btn.click(force=True)  # force 跳过遮罩检查
-                    await asyncio.sleep(2)
+                    await btn.click(force=True)
+                    await asyncio.sleep(3)
                     break
 
+        # 等二维码出现
         await asyncio.sleep(2)
 
-        # 二维码在登录弹窗里，class="qrcode-img"
-        qr_element = page.locator('img.qrcode-img').first
-        if await qr_element.count() == 0:
-            # 兜底：试试其他选择器
-            for sel in ['.qrcode-img', '[class*="qrcode"] img', 'canvas']:
-                loc = page.locator(sel).first
-                if await loc.count() > 0 and await loc.is_visible():
-                    qr_element = loc
-                    break
+        # 截取二维码
+        qr_element = None
+        for sel in ['img.qrcode-img', '.qrcode-img', '[class*="qrcode"] img', 'canvas']:
+            loc = page.locator(sel).first
+            if await loc.count() > 0 and await loc.is_visible():
+                qr_element = loc
+                break
 
         qr_path = str(_data_dir() / "snapshots" / "qrcode.png")
         Path(qr_path).parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +253,7 @@ async def qr_login(account: str = "default", serve_port: int = 18088) -> dict:
         if qr_element:
             await qr_element.screenshot(path=qr_path)
         else:
+            # 整页截图兜底
             await page.screenshot(path=qr_path)
 
         # 启动临时 HTTP 服务
