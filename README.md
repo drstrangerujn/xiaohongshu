@@ -62,7 +62,7 @@ Claude Code → Python 脚本 → Playwright → 小红书
 │   ├── search.py               # 搜索
 │   ├── detail.py               # 笔记详情
 │   ├── download.py             # 下载图片/视频
-│   ├── publish.py              # 发帖（半自动）
+│   ├── publish.py              # 发帖（默认自动，--preview 可先看）
 │   └── status.py               # 检查登录状态和今日用量
 ├── lib/
 │   ├── browser.py              # 浏览器 persistent context + profile 锁
@@ -125,18 +125,13 @@ python scripts/download.py --url "https://www.xiaohongshu.com/explore/xxxxx" --o
 
 下载记录写入 SQLite，已下载的自动跳过。
 
-### 发帖（半自动）
+### 发帖
 
 ```bash
 python scripts/publish.py --title "标题" --content "正文" --images ./img1.jpg ./img2.jpg --topics "话题1" "话题2"
 ```
 
-流程：
-1. 自动打开发布页、上传图片、填标题正文、加话题
-2. 生成预览截图，**停住，不自动点发布**
-3. 截图同步到本地确认，人工决定发不发
-
-不做全自动发布。发帖风险最高，让人看一眼再点总比出了问题回头查好。
+自动填充标题、正文、图片、话题，然后点发布。加 `--preview` 只填充不点发布，先截图看看再说。
 
 ## 防封号
 

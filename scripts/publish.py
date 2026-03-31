@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""半自动发布小红书图文笔记"""
+"""发布小红书图文笔记（默认自动发，--preview 可以先看再发）"""
 
 import argparse
 import asyncio
@@ -18,43 +18,24 @@ from lib.logger import log_task, save_screenshot
 
 
 @rate_limit("publish")
-async def prepare_publish(
+async def do_publish(
     account: str,
     title: str,
     content: str,
     images: list,
     topics: list = None,
+    preview_only: bool = False,
 ) -> dict:
     """
-    自动填充发布内容，停在预览阶段，不点发布按钮。
-    返回预览截图路径，由用户确认是否发布。
+    填充内容并发布。
+    preview_only=True 时只填充不点发布，截图后退出。
     """
 
     async with open_browser(account) as (ctx, page):
-        # 进入发布页
-        await page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=30000)
+        # 直接进创作者发布页
+        await page.goto("https://creator.xiaohongshu.com/publish/publish",
+                        wait_until="domcontentloaded", timeout=30000)
         await random_delay(2, 4)
-
-        # 找发布入口
-        publish_btn_selectors = [
-            '[class*="publish"]',
-            '[class*="creator"]',
-            'text=发布笔记',
-            'text=发笔记',
-        ]
-        clicked = False
-        for sel in publish_btn_selectors:
-            btn = page.locator(sel)
-            if await btn.count() > 0:
-                await btn.first.click()
-                clicked = True
-                await random_delay(2, 4)
-                break
-
-        if not clicked:
-            # 直接访问发布页
-            await page.goto("https://creator.xiaohongshu.com/publish/publish", wait_until="domcontentloaded", timeout=30000)
-            await random_delay(2, 4)
 
         anomaly = await check_page_anomaly(page)
         if not anomaly["ok"] and anomaly["level"] >= 3:
@@ -66,7 +47,6 @@ async def prepare_publish(
             if not os.path.exists(img_path):
                 raise FileNotFoundError(f"图片不存在: {img_path}")
 
-            # 找文件上传控件
             upload_selectors = [
                 'input[type="file"]',
                 '[class*="upload"] input[type="file"]',
@@ -78,7 +58,6 @@ async def prepare_publish(
                     await random_delay(2, 5)
                     break
 
-        # 等图片上传完
         await random_delay(3, 5)
 
         # 填标题
@@ -116,7 +95,6 @@ async def prepare_publish(
         # 添加话题
         if topics:
             for topic in topics:
-                # 输入 # 触发话题搜索
                 topic_input_selectors = [
                     '[placeholder*="话题"]',
                     '[class*="topic"] input',
@@ -128,49 +106,83 @@ async def prepare_publish(
                         await el.first.click()
                         await el.first.type(topic, delay=80)
                         await random_delay(1, 2)
-                        # 选第一个建议
                         suggestion = page.locator('[class*="suggest"] li, [class*="topic-item"]').first
                         if await suggestion.count() > 0:
                             await suggestion.click()
                             await random_delay(0.5, 1)
                         break
 
-        # 截图预览
         await random_delay(2, 4)
         screenshot_path = await save_screenshot(page, "publish_preview")
 
-        print(f"\n发布预览截图: {screenshot_path}")
-        print("内容已填好，但还没有点发布按钮。")
-        print("请查看截图确认内容无误。")
+        if preview_only:
+            return {
+                "status": "preview",
+                "screenshot": screenshot_path,
+                "title": title,
+                "detail": "预览模式，未点发布",
+            }
+
+        # 点发布按钮
+        publish_selectors = [
+            'button:has-text("发布")',
+            '[class*="submit"] button',
+            '[class*="publish"] button',
+            'button.submit',
+        ]
+        published = False
+        for sel in publish_selectors:
+            btn = page.locator(sel)
+            if await btn.count() > 0:
+                await btn.first.click()
+                published = True
+                await random_delay(3, 6)
+                break
+
+        if not published:
+            return {
+                "status": "error",
+                "screenshot": screenshot_path,
+                "title": title,
+                "detail": "找不到发布按钮，内容已填好，截图可查看",
+            }
+
+        # 检查是否发布成功
+        await random_delay(2, 4)
+        success_screenshot = await save_screenshot(page, "publish_result")
 
         return {
-            "status": "ready",
-            "screenshot": screenshot_path,
+            "status": "published",
+            "screenshot": success_screenshot,
             "title": title,
             "images_count": len(images),
-            "detail": "内容已填充，等待确认发布",
+            "detail": "已发布",
         }
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="半自动发布小红书图文笔记")
+    parser = argparse.ArgumentParser(description="发布小红书图文笔记")
     parser.add_argument("--title", "-t", required=True, help="标题")
     parser.add_argument("--content", "-c", required=True, help="正文")
     parser.add_argument("--images", "-i", nargs="+", required=True, help="图片路径")
     parser.add_argument("--topics", nargs="*", default=[], help="话题标签")
     parser.add_argument("--account", default="default", help="使用的账号")
+    parser.add_argument("--preview", action="store_true", help="只填充内容不发布，截图预览")
     args = parser.parse_args()
 
     try:
-        result = await prepare_publish(
-            args.account, args.title, args.content, args.images, args.topics
+        result = await do_publish(
+            args.account, args.title, args.content,
+            args.images, args.topics, preview_only=args.preview,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        log_task("publish", {"title": args.title}, "ready")
+
+        status = "preview" if args.preview else result["status"]
+        log_task("publish", {"title": args.title}, status)
 
     except Exception as e:
         log_task("publish", {"title": args.title}, "error", error=str(e))
-        print(f"发布准备失败: {e}", file=sys.stderr)
+        print(f"发布失败: {e}", file=sys.stderr)
         sys.exit(1)
 
 

@@ -46,13 +46,13 @@ python scripts/download.py --url "https://www.xiaohongshu.com/explore/xxxxx" [--
 
 下载笔记的所有图片和视频，自动跳过已下载的文件。
 
-### 半自动发帖
+### 发帖
 
 ```bash
-python scripts/publish.py --title "标题" --content "正文" --images img1.jpg img2.jpg [--topics "话题1" "话题2"]
+python scripts/publish.py --title "标题" --content "正文" --images img1.jpg img2.jpg [--topics "话题1" "话题2"] [--preview]
 ```
 
-自动填充标题、正文、图片和话题，但**不会自动点发布按钮**。会生成预览截图，需要用户确认后才发布。
+自动填充标题、正文、图片、话题，然后点发布。加 `--preview` 只填充不发布，先截图看看。
 
 ## 注意事项
 
