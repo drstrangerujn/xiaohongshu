@@ -12,5 +12,11 @@
     "default_viewport": { "width": 1280, "height": 800 },
     "locale": "zh-CN",
     "timezone": "Asia/Shanghai"
-  }
+  },
+  "notify": {
+    "ntfy_topic": "",
+    "telegram_bot_token": "",
+    "telegram_chat_id": ""
+  },
+  "qr_server_port": 18088
 }
