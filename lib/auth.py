@@ -80,6 +80,14 @@ async def check_login(account: str = "default") -> dict:
 
             user_id = user_info.get("user_id", "")
             nickname = user_info.get("nickname", "")
+            is_guest = user_info.get("guest", True)
+
+            # guest=true 是匿名游客，不算登录
+            if is_guest or not user_id:
+                return {
+                    "logged_in": False,
+                    "detail": "未登录（游客状态），需要扫码",
+                }
 
             if nickname:
                 return {
@@ -89,18 +97,11 @@ async def check_login(account: str = "default") -> dict:
                     "nickname": nickname,
                 }
 
-            if user_id:
-                return {
-                    "logged_in": True,
-                    "detail": f"已登录（user_id: {user_id}）",
-                    "user_id": user_id,
-                    "nickname": "",
-                }
-
-            # 浏览器没发 user/me 或返回无 user_id → 没登录
             return {
-                "logged_in": False,
-                "detail": "未登录，需要扫码",
+                "logged_in": True,
+                "detail": f"已登录（user_id: {user_id}）",
+                "user_id": user_id,
+                "nickname": "",
             }
 
     except Exception as e:
@@ -273,25 +274,46 @@ async def qr_login(account: str = "default", serve_port: int = 18088) -> dict:
         print(json.dumps(output, ensure_ascii=False, indent=2))
 
         # 轮询等待登录成功
+        # 检测方式：登录弹窗消失 + 刷新后 user/me 返回非 guest
         for i in range(60):  # 120秒
             await asyncio.sleep(2)
 
-            url = page.url
-            avatar = page.locator('[class*="user-avatar"], [class*="avatar"], .sidebar-avatar, img.ava')
-            login_el = page.locator('div.login-container, [class*="login-btn"]')
+            # 检查登录弹窗是否消失了（扫码成功后弹窗会关闭）
+            login_modal = page.locator('.login-modal, .login-container')
+            qr = page.locator('img.qrcode-img')
+            modal_gone = (await login_modal.count() == 0) or not await login_modal.first.is_visible()
+            qr_gone = (await qr.count() == 0)
 
-            if await avatar.count() > 0 or (await login_el.count() == 0 and "explore" in url):
-                await save_screenshot(page, "login_success")
-                log_task("login", {"account": account}, "success")
-                return {
-                    "success": True,
-                    "qr_path": qr_path,
-                    "qr_url": qr_url,
-                    "push": push_results,
-                    "detail": "登录成功",
-                }
+            if modal_gone and qr_gone:
+                # 弹窗消失了，刷新页面验证 user/me
+                login_confirmed = False
+                async def verify_login(response):
+                    nonlocal login_confirmed
+                    if "user/me" in response.url:
+                        try:
+                            body = await response.json()
+                            data = body.get("data", {})
+                            if data.get("user_id") and not data.get("guest"):
+                                login_confirmed = True
+                        except Exception:
+                            pass
 
-            # 每 20 秒刷新二维码
+                page.on("response", verify_login)
+                await page.reload(wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(5)
+
+                if login_confirmed:
+                    await save_screenshot(page, "login_success")
+                    log_task("login", {"account": account}, "success")
+                    return {
+                        "success": True,
+                        "qr_path": qr_path,
+                        "qr_url": qr_url,
+                        "push": push_results,
+                        "detail": "登录成功",
+                    }
+
+            # 每 20 秒刷新二维码截图（可能过期）
             if i > 0 and i % 10 == 0:
                 if qr_element and await qr_element.count() > 0:
                     await qr_element.screenshot(path=qr_path)
