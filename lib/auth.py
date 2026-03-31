@@ -49,24 +49,40 @@ def _config():
 
 
 async def check_login(account: str = "default") -> dict:
-    """检查登录状态，返回 {"logged_in": bool, "detail": str}"""
+    """
+    检查登录状态。三层判断：
+    1. cookie 里有 web_session → 已登录（最可靠，不依赖页面渲染）
+    2. 页面上有用户头像 → 已登录
+    3. 都没有 → 未登录
+    """
     try:
         async with open_browser(account) as (ctx, page):
             await page.goto(XHS_HOME, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
 
-            # 先查头像——有头像就是登录了（小红书页面上 login-btn 和 avatar 可能同时存在）
+            # 第一层：查 cookie（最可靠）
+            cookies = await ctx.cookies()
+            cookie_names = {c["name"] for c in cookies if "xiaohongshu" in c.get("domain", "")}
+            has_session = "web_session" in cookie_names
+
+            if has_session:
+                return {
+                    "logged_in": True,
+                    "detail": "已登录（web_session cookie 有效）",
+                    "cookies": sorted(cookie_names),
+                }
+
+            # 第二层：查页面元素
             user_avatar = page.locator('[class*="user-avatar"], [class*="avatar"], .sidebar-avatar, img.ava')
             if await user_avatar.count() > 0 and await user_avatar.first.is_visible():
-                return {"logged_in": True, "detail": "已登录"}
+                return {"logged_in": True, "detail": "已登录（页面有用户头像）", "cookies": sorted(cookie_names)}
 
-            # 再查登录弹窗或登录按钮
-            login_btn = page.locator('.login-modal, .login-container, button.login-btn')
-            if await login_btn.count() > 0 and await login_btn.first.is_visible():
-                return {"logged_in": False, "detail": "未登录，需要扫码"}
-
-            path = await save_screenshot(page, "login_check")
-            return {"logged_in": False, "detail": f"状态不确定，截图: {path}"}
+            # 第三层：没登录
+            return {
+                "logged_in": False,
+                "detail": "未登录，需要扫码",
+                "cookies": sorted(cookie_names),
+            }
 
     except Exception as e:
         return {"logged_in": False, "detail": f"检查失败: {e}"}

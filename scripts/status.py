@@ -19,8 +19,17 @@ async def main():
     args = parser.parse_args()
 
     # 登录状态
-    print(f"账号: {args.account}")
     status = await check_login(args.account)
+
+    # JSON 模式（方便 agent 解析）
+    if "--json" in sys.argv:
+        quota = {}
+        for op in ["search", "detail", "download", "publish"]:
+            quota[op] = get_remaining(op)
+        print(json.dumps({"account": args.account, "login": status, "quota": quota}, ensure_ascii=False))
+        return
+
+    print(f"账号: {args.account}")
     print(f"登录: {'✓' if status['logged_in'] else '✗'} {status['detail']}")
 
     # 配额
