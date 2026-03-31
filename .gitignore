@@ -1,0 +1,8 @@
+data/profiles/
+data/cache/
+data/downloads/
+data/logs/
+data/snapshots/
+__pycache__/
+*.pyc
+.lock
