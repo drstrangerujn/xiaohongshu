@@ -10,6 +10,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.browser import open_browser
+from lib.auth import _dismiss_cookie_banner
 from lib.parser import NetworkDataCollector, parse_note_from_api, parse_note_from_dom
 from lib.rate_limiter import rate_limit
 from lib.human_sim import random_delay
@@ -27,6 +28,7 @@ async def get_detail(account: str, url: str) -> dict:
 
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await random_delay(3, 6)
+        await _dismiss_cookie_banner(page)
 
         # 检查异常
         anomaly = await check_page_anomaly(page)

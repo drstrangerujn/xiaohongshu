@@ -17,24 +17,31 @@ from .logger import save_screenshot, log_task
 XHS_HOME = "https://www.xiaohongshu.com"
 
 
-async def _dismiss_cookie_banner(page):
-    """点掉小红书的 cookie banner"""
-    # 小红书实际的 cookie banner：class="cookie-banner__btn--primary" 文字 "Accept all cookies"
+async def _dismiss_popups(page):
+    """关掉 cookie banner 和登录弹窗等所有遮挡"""
+    # 1. Cookie banner
     try:
         accept_btn = page.locator('.cookie-banner__btn--primary')
         if await accept_btn.count() > 0 and await accept_btn.is_visible():
             await accept_btn.click()
             await asyncio.sleep(1)
-            return
     except Exception:
         pass
 
-    # 兜底：JS 直接删掉 cookie-banner 和 overlay
+    # 2. JS 一次性清理所有遮挡
     await page.evaluate("""
-        document.querySelectorAll('.cookie-banner, .cookie-banner-overlay, .cookie-banner--web').forEach(el => el.remove());
+        // cookie banner
+        document.querySelectorAll('.cookie-banner, .cookie-banner-overlay, .cookie-banner--web').forEach(e => e.remove());
+        // 登录弹窗
+        document.querySelectorAll('.login-modal, .reds-modal-open, .reds-mask').forEach(e => e.remove());
+        // 恢复滚动
         document.body.style.overflow = 'auto';
         document.documentElement.style.overflow = 'auto';
     """)
+
+
+# 保持旧名字兼容
+_dismiss_cookie_banner = _dismiss_popups
 
 
 def _data_dir():

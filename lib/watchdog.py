@@ -14,26 +14,16 @@ async def check_page_anomaly(page) -> dict:
     """
     url = page.url
     title = await page.title()
-    content = await page.content()
-    content_lower = content.lower()
 
-    # 验证码 / 滑块
-    captcha_signals = [
-        "captcha", "验证", "滑块", "slider", "verify",
-        "robot", "机器人", "安全验证",
-    ]
-    for signal in captcha_signals:
-        if signal in content_lower:
-            path = await save_screenshot(page, "captcha_detected")
-            return {
-                "ok": False,
-                "issue": f"检测到验证码/风控 (信号: {signal})",
-                "level": 3,
-                "screenshot": path,
-            }
+    # 用 body 可见文本判断，而不是整个 HTML（避免 class 名误触发）
+    try:
+        body_text = await page.locator("body").inner_text()
+    except Exception:
+        body_text = ""
+    text_lower = body_text.lower()
 
     # 403 / 限流
-    if "403" in title or "forbidden" in content_lower:
+    if "403" in title or "forbidden" in text_lower or "access denied" in text_lower:
         path = await save_screenshot(page, "forbidden")
         return {
             "ok": False,
@@ -42,8 +32,29 @@ async def check_page_anomaly(page) -> dict:
             "screenshot": path,
         }
 
+    # 验证码 / 滑块
+    # 注意：登录弹窗里的"获取验证码"不是风控验证码，要排除
+    is_login_popup = "手机号登录" in body_text or "扫码登录" in body_text or "登录后推荐" in body_text
+    if not is_login_popup:
+        captcha_signals = ["滑块验证", "安全验证", "人机验证", "机器人", "robot check", "请完成验证"]
+        for signal in captcha_signals:
+            if signal in text_lower:
+                path = await save_screenshot(page, "captcha_detected")
+                return {
+                    "ok": False,
+                    "issue": f"检测到验证码/风控 (信号: {signal})",
+                    "level": 3,
+                    "screenshot": path,
+                }
+    elif is_login_popup:
+        # 登录弹窗不是异常，但说明需要登录
+        return {
+            "ok": False,
+            "issue": "需要登录，请先运行 login.py 扫码",
+            "level": 2,
+        }
+
     # 空白页 / 加载失败
-    body_text = await page.locator("body").inner_text()
     if len(body_text.strip()) < 50:
         path = await save_screenshot(page, "empty_page")
         return {
