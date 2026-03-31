@@ -18,55 +18,20 @@ XHS_HOME = "https://www.xiaohongshu.com"
 
 
 async def _dismiss_cookie_banner(page):
-    """点掉 cookie/隐私弹窗，点不掉就用 JS 强删"""
-    # 先试着点"同意"/"接受"/"确定"按钮
-    accept_selectors = [
-        'button:has-text("同意")',
-        'button:has-text("接受")',
-        'button:has-text("确定")',
-        'button:has-text("Accept")',
-        'button:has-text("OK")',
-        'button:has-text("I agree")',
-        '[class*="cookie"] button',
-        '[class*="Cookie"] button',
-        '[class*="consent"] button',
-        '[class*="privacy"] button',
-        '[class*="banner"] button',
-        '[id*="cookie"] button',
-        '.cookie-banner button',
-        '.privacy-banner button',
-    ]
-    for sel in accept_selectors:
-        try:
-            btn = page.locator(sel).first
-            if await btn.count() > 0 and await btn.is_visible():
-                await btn.click()
-                await asyncio.sleep(1)
-                return
-        except Exception:
-            continue
+    """点掉小红书的 cookie banner"""
+    # 小红书实际的 cookie banner：class="cookie-banner__btn--primary" 文字 "Accept all cookies"
+    try:
+        accept_btn = page.locator('.cookie-banner__btn--primary')
+        if await accept_btn.count() > 0 and await accept_btn.is_visible():
+            await accept_btn.click()
+            await asyncio.sleep(1)
+            return
+    except Exception:
+        pass
 
-    # 点不掉就直接用 JS 删掉遮挡元素
+    # 兜底：JS 直接删掉 cookie-banner 和 overlay
     await page.evaluate("""
-        // 删 cookie/privacy 相关的遮罩
-        const selectors = [
-            '[class*="cookie"]', '[class*="Cookie"]',
-            '[class*="consent"]', '[class*="Consent"]',
-            '[class*="privacy"]', '[class*="Privacy"]',
-            '[class*="banner"]', '[id*="cookie"]',
-            '[class*="overlay"]', '[class*="modal"]',
-        ];
-        for (const sel of selectors) {
-            document.querySelectorAll(sel).forEach(el => {
-                const text = (el.innerText || '').toLowerCase();
-                if (text.includes('cookie') || text.includes('隐私') ||
-                    text.includes('同意') || text.includes('accept') ||
-                    text.includes('consent') || text.includes('privacy')) {
-                    el.remove();
-                }
-            });
-        }
-        // 恢复页面滚动（有些弹窗会锁 body）
+        document.querySelectorAll('.cookie-banner, .cookie-banner-overlay, .cookie-banner--web').forEach(el => el.remove());
         document.body.style.overflow = 'auto';
         document.documentElement.style.overflow = 'auto';
     """)
@@ -90,8 +55,8 @@ async def check_login(account: str = "default") -> dict:
             await page.goto(XHS_HOME, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
 
-            login_btn = page.locator('div.login-container, [class*="login-btn"], [class*="LoginBtn"]')
-            if await login_btn.count() > 0:
+            login_btn = page.locator('button.login-btn, .login-modal, .login-container')
+            if await login_btn.count() > 0 and await login_btn.first.is_visible():
                 return {"logged_in": False, "detail": "未登录，需要扫码"}
 
             user_avatar = page.locator('[class*="user-avatar"], [class*="avatar"], .sidebar-avatar, img.ava')
@@ -213,36 +178,28 @@ async def qr_login(account: str = "default", serve_port: int = 18088) -> dict:
         # 干掉 cookie banner / 隐私弹窗（点"同意"或直接关掉）
         await _dismiss_cookie_banner(page)
 
-        # 点击登录按钮
-        for sel in ['div.login-container', '[class*="login-btn"]', '[class*="LoginBtn"]']:
-            btn = page.locator(sel)
-            if await btn.count() > 0:
-                await btn.first.click()
-                await asyncio.sleep(2)
-                break
+        # 小红书关掉 cookie banner 后会自动弹出登录弹窗（.login-modal）
+        # 如果没弹出来，再手动点登录按钮
+        login_modal = page.locator('.login-modal, .login-container')
+        if await login_modal.count() == 0 or not await login_modal.first.is_visible():
+            for sel in ['button.login-btn', '.side-bar-component.login-btn', '[class*="login-btn"]']:
+                btn = page.locator(sel).first
+                if await btn.count() > 0 and await btn.is_visible():
+                    await btn.click(force=True)  # force 跳过遮罩检查
+                    await asyncio.sleep(2)
+                    break
 
-        # 再清一次，有的弹窗是点了登录才出来
-        await _dismiss_cookie_banner(page)
+        await asyncio.sleep(2)
 
-        # 切到扫码登录
-        for sel in ['text=扫码登录', '[class*="qrcode"]', '[class*="QRCode"]']:
-            tab = page.locator(sel)
-            if await tab.count() > 0:
-                await tab.first.click()
-                await asyncio.sleep(2)
-                break
-
-        # 截取二维码
-        qr_selectors = [
-            '[class*="qrcode"] img', '[class*="QRCode"] img',
-            'canvas[class*="qr"]', '.qrcode-img', '#qrcode img',
-        ]
-        qr_element = None
-        for sel in qr_selectors:
-            loc = page.locator(sel)
-            if await loc.count() > 0:
-                qr_element = loc.first
-                break
+        # 二维码在登录弹窗里，class="qrcode-img"
+        qr_element = page.locator('img.qrcode-img').first
+        if await qr_element.count() == 0:
+            # 兜底：试试其他选择器
+            for sel in ['.qrcode-img', '[class*="qrcode"] img', 'canvas']:
+                loc = page.locator(sel).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    qr_element = loc
+                    break
 
         qr_path = str(_data_dir() / "snapshots" / "qrcode.png")
         Path(qr_path).parent.mkdir(parents=True, exist_ok=True)
