@@ -55,13 +55,15 @@ async def check_login(account: str = "default") -> dict:
             await page.goto(XHS_HOME, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
 
-            login_btn = page.locator('button.login-btn, .login-modal, .login-container')
+            # 先查头像——有头像就是登录了（小红书页面上 login-btn 和 avatar 可能同时存在）
+            user_avatar = page.locator('[class*="user-avatar"], [class*="avatar"], .sidebar-avatar, img.ava')
+            if await user_avatar.count() > 0 and await user_avatar.first.is_visible():
+                return {"logged_in": True, "detail": "已登录"}
+
+            # 再查登录弹窗或登录按钮
+            login_btn = page.locator('.login-modal, .login-container, button.login-btn')
             if await login_btn.count() > 0 and await login_btn.first.is_visible():
                 return {"logged_in": False, "detail": "未登录，需要扫码"}
-
-            user_avatar = page.locator('[class*="user-avatar"], [class*="avatar"], .sidebar-avatar, img.ava')
-            if await user_avatar.count() > 0:
-                return {"logged_in": True, "detail": "已登录"}
 
             path = await save_screenshot(page, "login_check")
             return {"logged_in": False, "detail": f"状态不确定，截图: {path}"}
