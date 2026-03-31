@@ -17,6 +17,61 @@ from .logger import save_screenshot, log_task
 XHS_HOME = "https://www.xiaohongshu.com"
 
 
+async def _dismiss_cookie_banner(page):
+    """点掉 cookie/隐私弹窗，点不掉就用 JS 强删"""
+    # 先试着点"同意"/"接受"/"确定"按钮
+    accept_selectors = [
+        'button:has-text("同意")',
+        'button:has-text("接受")',
+        'button:has-text("确定")',
+        'button:has-text("Accept")',
+        'button:has-text("OK")',
+        'button:has-text("I agree")',
+        '[class*="cookie"] button',
+        '[class*="Cookie"] button',
+        '[class*="consent"] button',
+        '[class*="privacy"] button',
+        '[class*="banner"] button',
+        '[id*="cookie"] button',
+        '.cookie-banner button',
+        '.privacy-banner button',
+    ]
+    for sel in accept_selectors:
+        try:
+            btn = page.locator(sel).first
+            if await btn.count() > 0 and await btn.is_visible():
+                await btn.click()
+                await asyncio.sleep(1)
+                return
+        except Exception:
+            continue
+
+    # 点不掉就直接用 JS 删掉遮挡元素
+    await page.evaluate("""
+        // 删 cookie/privacy 相关的遮罩
+        const selectors = [
+            '[class*="cookie"]', '[class*="Cookie"]',
+            '[class*="consent"]', '[class*="Consent"]',
+            '[class*="privacy"]', '[class*="Privacy"]',
+            '[class*="banner"]', '[id*="cookie"]',
+            '[class*="overlay"]', '[class*="modal"]',
+        ];
+        for (const sel of selectors) {
+            document.querySelectorAll(sel).forEach(el => {
+                const text = (el.innerText || '').toLowerCase();
+                if (text.includes('cookie') || text.includes('隐私') ||
+                    text.includes('同意') || text.includes('accept') ||
+                    text.includes('consent') || text.includes('privacy')) {
+                    el.remove();
+                }
+            });
+        }
+        // 恢复页面滚动（有些弹窗会锁 body）
+        document.body.style.overflow = 'auto';
+        document.documentElement.style.overflow = 'auto';
+    """)
+
+
 def _data_dir():
     return Path(__file__).resolve().parent.parent / "data"
 
@@ -155,6 +210,9 @@ async def qr_login(account: str = "default", serve_port: int = 18088) -> dict:
         await page.goto(XHS_HOME, wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(3)
 
+        # 干掉 cookie banner / 隐私弹窗（点"同意"或直接关掉）
+        await _dismiss_cookie_banner(page)
+
         # 点击登录按钮
         for sel in ['div.login-container', '[class*="login-btn"]', '[class*="LoginBtn"]']:
             btn = page.locator(sel)
@@ -162,6 +220,9 @@ async def qr_login(account: str = "default", serve_port: int = 18088) -> dict:
                 await btn.first.click()
                 await asyncio.sleep(2)
                 break
+
+        # 再清一次，有的弹窗是点了登录才出来
+        await _dismiss_cookie_banner(page)
 
         # 切到扫码登录
         for sel in ['text=扫码登录', '[class*="qrcode"]', '[class*="QRCode"]']:
