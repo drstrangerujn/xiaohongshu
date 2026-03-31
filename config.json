@@ -2,7 +2,7 @@
   "base_dir": "~/.claude/skills/xiaohongshu",
   "data_dir": "data",
   "rate_limits": {
-    "search":   { "min_delay": 5,   "max_delay": 30,  "daily_limit": 50  },
+    "search":   { "min_delay": 5,   "max_delay": 30,  "daily_limit": 500 },
     "detail":   { "min_delay": 3,   "max_delay": 15,  "daily_limit": 100 },
     "download": { "min_delay": 2,   "max_delay": 10,  "daily_limit": 200 },
     "publish":  { "min_delay": 300, "max_delay": 600, "daily_limit": 3   }
